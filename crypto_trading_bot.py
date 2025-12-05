@@ -148,11 +148,17 @@ def main():
     print("Model switched to evaluation mode\n")
     
     # Step 3: Live prediction loop
+    # Calculate sleep interval based on timeframe
+    timeframe_minutes = {
+        '1m': 1, '5m': 5, '15m': 15, '30m': 30,
+        '1h': 60, '4h': 240, '1d': 1440
+    }.get(TIMEFRAME, 15)
+    
     print("=" * 60)
     print("STEP 3: Starting live prediction loop")
     print("=" * 60)
     print(f"Monitoring {SYMBOL} on {TIMEFRAME} timeframe")
-    print(f"Sleep interval: 15 minutes\n")
+    print(f"Sleep interval: {timeframe_minutes} minutes\n")
     
     while True:
         try:
@@ -176,14 +182,14 @@ def main():
             # Check if we have enough data
             if len(df_live_features) < SEQUENCE_LENGTH:
                 print(f"Not enough data. Have {len(df_live_features)}, need {SEQUENCE_LENGTH}")
-                time.sleep(15 * 60)
+                time.sleep(timeframe_minutes * 60)
                 continue
             
             # Verify all required features exist
             missing_features = [col for col in feature_columns if col not in df_live_features.columns]
             if missing_features:
                 print(f"Warning: Missing features {missing_features}. Skipping this iteration.")
-                time.sleep(15 * 60)
+                time.sleep(timeframe_minutes * 60)
                 continue
             
             # Prepare sequence (last SEQUENCE_LENGTH rows)
@@ -203,26 +209,29 @@ def main():
             # Get current price
             current_price = df_live_features['close'].iloc[-1]
             
-            # Calculate percentage change
-            price_change_pct = ((prediction - current_price) / current_price) * 100
+            # Model predicts percentage return, convert to price prediction
+            # prediction is already in percentage (e.g., 0.5 means +0.5%)
+            price_change_pct = prediction
+            predicted_price = current_price * (1 + prediction / 100.0)
             
             # Generate signal
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"[{timestamp}] Current Price: ${current_price:.2f}")
-            print(f"Predicted Price: ${prediction:.2f}")
+            print(f"Predicted Price: ${predicted_price:.2f}")
             print(f"Expected Change: {price_change_pct:.2f}%")
             
-            if price_change_pct > 0.1:
+            # Scalping thresholds (tighter for 5m timeframe)
+            if price_change_pct > 0.05:  # 0.05% for scalping
                 print(">>> SIGNAL: STRONG BUY <<<")
-            elif price_change_pct < -0.1:
+            elif price_change_pct < -0.05:  # -0.05% for scalping
                 print(">>> SIGNAL: STRONG SELL <<<")
             else:
                 print(">>> SIGNAL: HOLD <<<")
             
             print("-" * 60)
             
-            # Sleep for 15 minutes (900 seconds)
-            time.sleep(15 * 60)
+            # Sleep for timeframe duration
+            time.sleep(timeframe_minutes * 60)
             
         except KeyboardInterrupt:
             print("\nStopping bot...")

@@ -6,7 +6,7 @@ import torch
 
 # Trading Configuration
 SYMBOL = 'BTC/USDT'
-TIMEFRAME = '15m'
+TIMEFRAME = '5m'  # Changed from 15m to 5m for faster trading signals
 TRAINING_LIMIT = 50000  # Number of candles for training
 LIVE_UPDATE_LIMIT = 100  # Number of candles for live updates
 

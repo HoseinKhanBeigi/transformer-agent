@@ -20,14 +20,38 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame with additional features
     """
     df = df.copy()
+
+    # Ensure we don't have duplicate index values (e.g., duplicate timestamps).
+    # Some exchanges or pagination patterns can occasionally return overlapping
+    # candles, which breaks certain pandas_ta indicators (like MACD) because
+    # they cannot reindex on duplicate labels.
+    if df.index.has_duplicates:
+        df = df[~df.index.duplicated(keep="last")]
     
     # Technical indicators using pandas_ta
     df['rsi'] = ta.rsi(df['close'], length=14)
+
+    # MACD - handle different pandas_ta column naming conventions robustly
     macd = ta.macd(df['close'])
     if macd is not None and not macd.empty:
-        df['macd'] = macd['MACD_12_26_9']
-        df['macd_signal'] = macd['MACDS_12_26_9']
-        df['macd_hist'] = macd['MACDh_12_26_9']
+        macd_cols = list(macd.columns)
+
+        # Helper to find a column by fuzzy name
+        def _find_col(candidates):
+            for col in macd_cols:
+                lower = col.lower()
+                if any(key in lower for key in candidates):
+                    return col
+            return None
+
+        macd_col = _find_col(["macd"])
+        # prefer explicit signal/hist keys so they don't get caught by generic "macd"
+        signal_col = _find_col(["signal", "macds"])
+        hist_col = _find_col(["hist", "macdh"])
+
+        df['macd'] = macd[macd_col] if macd_col in macd.columns else 0.0
+        df['macd_signal'] = macd[signal_col] if signal_col in macd.columns else 0.0
+        df['macd_hist'] = macd[hist_col] if hist_col in macd.columns else 0.0
     else:
         df['macd'] = 0.0
         df['macd_signal'] = 0.0
@@ -54,14 +78,34 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
     
     # Extended features (optional - can be disabled for faster training)
     if USE_EXTENDED_FEATURES:
-        # Bollinger Bands
+        # Bollinger Bands - handle different column names robustly
         bbands = ta.bbands(df['close'], length=20, std=2)
         if bbands is not None and not bbands.empty:
-            df['bb_upper'] = bbands['BBU_20_2.0']
-            df['bb_middle'] = bbands['BBM_20_2.0']
-            df['bb_lower'] = bbands['BBL_20_2.0']
-            df['bb_width'] = (bbands['BBU_20_2.0'] - bbands['BBL_20_2.0']) / bbands['BBM_20_2.0']
-            df['bb_position'] = (df['close'] - bbands['BBL_20_2.0']) / (bbands['BBU_20_2.0'] - bbands['BBL_20_2.0'] + 1e-8)
+            bb_cols = list(bbands.columns)
+
+            def _find_bb(candidates):
+                for col in bb_cols:
+                    lower = col.lower()
+                    if any(key in lower for key in candidates):
+                        return col
+                return None
+
+            upper_col = _find_bb(["upper", "bbu"])
+            middle_col = _find_bb(["middle", "bbm"])
+            lower_col = _find_bb(["lower", "bbl"])
+
+            if upper_col and lower_col and middle_col:
+                df['bb_upper'] = bbands[upper_col]
+                df['bb_middle'] = bbands[middle_col]
+                df['bb_lower'] = bbands[lower_col]
+                df['bb_width'] = (bbands[upper_col] - bbands[lower_col]) / (bbands[middle_col] + 1e-8)
+                df['bb_position'] = (df['close'] - bbands[lower_col]) / (bbands[upper_col] - bbands[lower_col] + 1e-8)
+            else:
+                df['bb_upper'] = df['close']
+                df['bb_middle'] = df['close']
+                df['bb_lower'] = df['close']
+                df['bb_width'] = 0.0
+                df['bb_position'] = 0.5
         else:
             df['bb_upper'] = df['close']
             df['bb_middle'] = df['close']
@@ -69,11 +113,23 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
             df['bb_width'] = 0.0
             df['bb_position'] = 0.5
         
-        # Stochastic Oscillator
+        # Stochastic Oscillator - robust to name variations
         stoch = ta.stoch(df['high'], df['low'], df['close'])
         if stoch is not None and not stoch.empty:
-            df['stoch_k'] = stoch['STOCHk_14_3_3']
-            df['stoch_d'] = stoch['STOCHd_14_3_3']
+            stoch_cols = list(stoch.columns)
+
+            def _find_stoch(candidates):
+                for col in stoch_cols:
+                    lower = col.lower()
+                    if any(key in lower for key in candidates):
+                        return col
+                return None
+
+            k_col = _find_stoch(["stochk", "%k", "k_"])
+            d_col = _find_stoch(["stochd", "%d", "d_"])
+
+            df['stoch_k'] = stoch[k_col] if k_col in stoch.columns else 50.0
+            df['stoch_d'] = stoch[d_col] if d_col in stoch.columns else 50.0
         else:
             df['stoch_k'] = 50.0
             df['stoch_d'] = 50.0
@@ -192,8 +248,11 @@ def prepare_sequences(
         seq = df[feature_columns].iloc[i-sequence_length:i].values
         sequences.append(seq)
         
-        # Target: next closing price
-        target = df['close'].iloc[i]
+        # Target: percentage return (better for scalping)
+        # Predict (next_price / current_price - 1) * 100
+        current_price = df['close'].iloc[i-1]
+        next_price = df['close'].iloc[i]
+        target = ((next_price / current_price) - 1.0) * 100.0  # Percentage return
         targets.append(target)
     
     return np.array(sequences), np.array(targets)

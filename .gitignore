@@ -14,12 +14,6 @@ venv/
 ENV/
 .venv
 
-# Model files (can be large)
-*.pth
-*.pt
-*.pkl
-*.h5
-*.ckpt
 
 # IDE
 .vscode/
